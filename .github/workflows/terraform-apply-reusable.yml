@@ -1,0 +1,92 @@
+name: 'Reusable Terraform Apply'
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: 'Target environment (dev, qa, prod)'
+      cloud_provider:
+        required: true
+        type: string
+        description: 'azure or aws'
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+      tf_version:
+        required: false
+        type: string
+        default: '1.5.0'
+    secrets:
+      # Azure Secrets
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      # AWS Secrets
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_REGION:
+        required: false
+      # Backend Secrets
+      TF_BACKEND_CONFIG:
+        required: true
+
+jobs:
+  apply:
+    name: Apply ${{ inputs.environment }} (${{ inputs.cloud_provider }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ inputs.tf_version }}
+
+      - name: Download Plan
+        uses: actions/download-artifact@v3
+        with:
+          name: tfplan-${{ inputs.cloud_provider }}-${{ inputs.environment }}
+          path: ${{ inputs.working_directory }}
+
+      # Azure Login if provider is azure
+      - name: Azure Login
+        if: inputs.cloud_provider == 'azure'
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # AWS Login if provider is aws
+      - name: Configure AWS Credentials
+        if: inputs.cloud_provider == 'aws'
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          echo "${{ secrets.TF_BACKEND_CONFIG }}" > backend.conf
+          terraform init -backend-config=backend.conf
+
+      - name: Terraform Apply
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform apply -auto-approve tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_USE_OIDC: true
